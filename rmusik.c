@@ -1,6 +1,6 @@
 //SG
 
-//Random Music Player - rmPlayer
+//Random Music Player - rmusik
 
 #include <stdio.h>
 #include <unistd.h>
