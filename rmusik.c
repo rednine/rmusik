@@ -13,13 +13,26 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <fcntl.h>
 
 /* Datatypes */
+
+/* https://www.experts-exchange.com/questions/23250824/TCP-server-in-C-How-to-avoid-Interrupted-system-call.html */
 
 #define RM_MAX_PATH_LEN	  1024
 #define MAX_DIR_ENTRIES   512
 #define MAX_DIR_ENTRY_LEN 256
 #define MAX_ACTIONS       5
+#define RM_MSG_Q_KEY      (('r'<<24) | ('m'<<16) | ('s'<<8) | ('e'))
+#define MAX_RETRIES       10
+
+union semun {
+    int val;
+    struct semid_ds *buf;
+    ushort *array;
+};
 
 typedef enum
 {
@@ -63,6 +76,8 @@ typedef struct
 	}dirEntries[MAX_DIR_ENTRIES];
 	playBackState_t playbackState;
 	pid_t playerPid;
+	int semId;
+	int devRandFd;
 }playerInstance_t;
 
 /* Global variables */
@@ -70,7 +85,21 @@ typedef struct
 playerInstance_t rmPlayer;
 extern int errno;
 
-/* Functions */
+/************ Functions ***************/
+
+int GetRandomNumber()
+{	
+	char data[1];
+	int result = read(rmPlayer.devRandFd, (void *)data, 1);
+	if(result < 0)
+	{
+		printf("\n GetRandomNumber : failed to read /dev/urandom, falling back to rand()\n");
+		return rand();
+	}
+	
+	return((int)data[0]);	
+}
+
 int GetNextActionMask()
 {
 	int actionMask = 0;
@@ -100,7 +129,8 @@ int ChooseNextAction(int actionMask)
 	while(1)
 	{
 		randAction = rand();
-		action = randAction % MAX_ACTIONS;
+		//randAction = GetRandomNumber();
+		action = randAction % ACT_MAX;//MAX_ACTIONS;
 		//printf("\n %s : action = %d randAction = %X actionMask & action = %d\n", __FUNCTION__, action, randAction, (actionMask & action)); 
 
 		if(IS_VALID_ACTION(action))
@@ -124,6 +154,137 @@ void CheckErrNo()
 	printf("\n %s : error = %d %s \n", __FUNCTION__, errno, strerror(errno));
 }
 
+/*
+** initsem() -- more-than-inspired by W. Richard Stevens' UNIX Network
+** Programming 2nd edition, volume 2, lockvsem.c, page 295.
+*/
+int rm_sem_init()
+{
+	int i;
+    union semun arg;
+    struct semid_ds buf;
+    struct sembuf sb;
+    int semid;
+    int nsems = 1;
+
+    semid = semget(RM_MSG_Q_KEY, nsems, IPC_CREAT | IPC_EXCL | 0666);
+
+#if 0
+    if (semid >= 0) 
+    { 
+		/* we got it first */
+        sb.sem_op = 1; 
+        sb.sem_flg = 0;
+        arg.val = 1;
+
+        for(sb.sem_num = 0; sb.sem_num < nsems; sb.sem_num++) 
+        { 
+            /* do a semop() to "free" the semaphores. */
+            /* this sets the sem_otime field, as needed below. */
+            if (semop(semid, &sb, 1) == -1) 
+            {
+                int e = errno;
+                semctl(semid, 0, IPC_RMID); /* clean up */
+                errno = e;
+                return -1; /* error, check errno */
+            }
+        }
+    }
+    else if (errno == EEXIST) 
+    {
+		/* someone else got it first */
+        int ready = 0;
+
+        semid = semget(RM_MSG_Q_KEY, nsems, 0); /* get the id */
+        if (semid < 0) return semid; /* error, check errno */
+
+        /* wait for other process to initialize the semaphore: */
+        arg.buf = &buf;
+        for(i = 0; i < MAX_RETRIES && !ready; i++) {
+            semctl(semid, nsems-1, IPC_STAT, arg);
+            if (arg.buf->sem_otime != 0) {
+                ready = 1;
+            } else {
+                sleep(1);
+            }
+        }
+        if (!ready) {
+            errno = ETIME;
+            return -1;
+        }
+    } 
+    else 
+    {
+        return semid; /* error, check errno */
+    }
+#endif
+
+    return semid;
+}
+
+void rm_sem_dispval(int semid, int member)
+{
+        int semval;
+
+        semval = semctl(semid, member, GETVAL, 0);
+        printf("\n %s : semval for member %d is %d\n", __FUNCTION__, member, semval);
+}
+
+void rm_sem_wait()
+{
+	struct sembuf sb;
+	
+	rm_sem_dispval(rmPlayer.semId, 0);
+    
+    sb.sem_num = 0;
+    sb.sem_op = -1;  /* set to allocate resource */
+    sb.sem_flg = SEM_UNDO;
+    
+    if (semop(rmPlayer.semId, &sb, 1) == -1) 
+    {
+        if(errno == EINTR)
+        {
+			//retry once more...
+			if (semop(rmPlayer.semId, &sb, 1) == -1)
+				CheckErrNo();
+			else
+				printf("\n %s : sem_wait OK...\n", __FUNCTION__);
+		}
+		else
+			CheckErrNo();
+    }
+} 
+
+void rm_sem_post()
+{
+	struct sembuf sb;
+    
+    sb.sem_num = 0;
+    sb.sem_op = 1;  /* free resource */
+    sb.sem_flg = SEM_UNDO;
+    
+    if (semop(rmPlayer.semId, &sb, 1) == -1) 
+    {
+        CheckErrNo();
+    }
+    else
+		printf("\n %s : sem_post OK...\n", __FUNCTION__);
+		
+	rm_sem_dispval(rmPlayer.semId, 0);	
+}
+
+void rm_sem_destroy()
+{
+	union semun arg;
+	
+	if (semctl(rmPlayer.semId, 0, IPC_RMID, arg) == -1) 
+	{
+        CheckErrNo();
+    }
+    else
+		printf("\n %s : sem_destroy OK...\n", __FUNCTION__);
+}
+
 int SelectRandomDirEntry(dirEntry_t entry)
 {
 	int dirIndex = 0;
@@ -131,11 +292,12 @@ int SelectRandomDirEntry(dirEntry_t entry)
 
 	while(1)
 	{
-		dirIndex = rand() % (numEntries + 1);
+		dirIndex = rand() % (numEntries);
+		//dirIndex = GetRandomNumber() % (numEntries);
 		
 		//printf("\n %s : numEntries = %d dirIndex = %d \n", __FUNCTION__, numEntries, dirIndex);
 
-		if((dirIndex >=0 && dirIndex <=numEntries) &&
+		if((dirIndex >=0 && dirIndex <numEntries) &&
 				(entry == rmPlayer.dirEntries[dirIndex].entryType) &&
 				(strcmp(rmPlayer.dirEntries[dirIndex].entryName, ".") != 0) &&
 				(strcmp(rmPlayer.dirEntries[dirIndex].entryName, "..") != 0))
@@ -176,6 +338,8 @@ void PlaySong()
 		}
 		else
 		{
+			//wait for previous song to have ended
+			rm_sem_wait();
 			printf("\n %s : Killed child player process..\n", __FUNCTION__);
 			rmPlayer.playbackState = PLAYBACK_STOPPED;
 		}
@@ -231,7 +395,7 @@ int UpdatePlayerInstance()
 		{
 			struct dirent *dirEntry;
 
-			while(!errno && (dirEntry = readdir(dirHandle))!= NULL)
+			while(/*!errno &&*/ (dirEntry = readdir(dirHandle))!= NULL)
 			{
 				char name[RM_MAX_PATH_LEN];
 
@@ -272,9 +436,10 @@ int UpdatePlayerInstance()
 				}
 			}//end while
 
-			if(errno)
+			if(errno && errno != EINTR)
 			{
 				printf("\n %s : %d : Error reading dir entries of %s \n", __FUNCTION__, __LINE__, rmPlayer.curDir);
+				CheckErrNo();
 				return -1;
 			}
 			else
@@ -374,13 +539,15 @@ int SelectNextSongDir()
 		{
 			//printf("\n %s : Selecting Child Dir\n", __FUNCTION__);
 			SelectChildDir();
-			UpdatePlayerInstance();
+			if (UpdatePlayerInstance() < 0)
+				continue;
 		}
 		else if(nextAction == ACT_GO_UP)
 		{
 			//printf("\n %s : Selecting Parent Dir\n", __FUNCTION__);
 			SelectParentDir();
-			UpdatePlayerInstance();
+			if (UpdatePlayerInstance() < 0)
+				continue;
 		}
 		else if(nextAction == ACT_FILE_PLAY)
 		{
@@ -419,7 +586,46 @@ int ExitPlayer()
 		}
 	}
 	
+	rm_sem_destroy();
+	
+	close(rmPlayer.devRandFd);
+	
 	return retVal;
+}
+
+void sigaction_handler(int signo, siginfo_t * siginfo, void *data)
+{
+	if((signo == SIGINT) || (signo == SIGTERM))
+	{
+		printf("\n %s : SIGINT/SIGTERM received  - killing child player process...\n", __FUNCTION__);
+		exit(ExitPlayer());
+	}
+	else if(signo == SIGCHLD)
+	{
+		int childStatus = 0;
+		pid_t childPid= 0;
+		
+		printf("\n %s : SIGCHLD received - waiting child player process to exit[%d]...", __FUNCTION__, rmPlayer.playerPid);
+		childPid = waitpid(-1/*rmPlayer.playerPid*/, &childStatus, WNOHANG);
+		if(childPid < 0)
+			CheckErrNo();
+		else
+			printf("...DONE [CHILD PID=%d]\n", childPid);
+	
+		rmPlayer.playbackState = PLAYBACK_STOPPED;
+		
+		//Dont release the semphore if child exited normally
+		if(siginfo->si_code != CLD_EXITED)
+		{
+			//Indicate completion of killing of previous child
+			rm_sem_post(); 
+			printf("\n Child exited abnormally, releasing semaphore \n"); 
+		}
+	}	
+	else
+		printf("\n %s : Unknown or unhandled signal %d\n", __FUNCTION__, signo);
+		
+	rm_sem_dispval(rmPlayer.semId, 0);
 }
 
 static void signal_handler (int signo)
@@ -440,19 +646,19 @@ static void signal_handler (int signo)
 			CheckErrNo();
 		else
 			printf("...DONE [CHILD PID=%d]\n", childPid);
-		//rmPlayer.playbackState = PLAYBACK_STOPPED;
+	
+		rmPlayer.playbackState = PLAYBACK_STOPPED;
+		
+		//Indicate completion of killing of previous child
+		rm_sem_post(); 
 	}	
 	else
 		printf("\n %s : Unknown or unhandled signal %d\n", __FUNCTION__, signo);
 }
 
-void main(int argc, char *argv[])
+void registerSignalHandlers()
 {
-	int option = 0;
-	int retVal = 0;
-
-	/* /media/sunil/02C6FF22C6FF151F/Songs/mixed */
-	
+#if 0
 	if (signal (SIGINT, signal_handler) == SIG_ERR) {
 		fprintf (stderr, "Cannot handle SIGINT!\n");
 		exit (EXIT_FAILURE);
@@ -466,7 +672,54 @@ void main(int argc, char *argv[])
 	if (signal (SIGCHLD, signal_handler) == SIG_ERR) {
 		fprintf (stderr, "Cannot handle SIGCHLD!\n");
 		exit (EXIT_FAILURE);
-	}	
+	}
+#else
+
+	struct sigaction sigAct = 
+	{
+		.sa_handler = NULL,
+		.sa_sigaction = sigaction_handler,
+		.sa_flags = (/*SA_NOCLDSTOP |*/ SA_RESTART),
+		.sa_restorer = NULL
+	};
+	
+#if 0
+	struct sigaction sigAct; 
+	
+	sigAct.sa_handler = &signal_handler;
+	sigAct.sa_sigaction = NULL;
+	sigAct.sa_flags = (SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART);
+	sigAct.sa_restorer = NULL;
+#endif
+	
+	sigfillset(&sigAct.sa_mask);
+	
+	if(sigaction(SIGINT, &sigAct, NULL) < 0) {
+		fprintf (stderr, "Cannot handle SIGINT!\n");
+		exit (EXIT_FAILURE);
+	}
+
+	if(sigaction(SIGTERM, &sigAct, NULL) < 0) {
+		fprintf (stderr, "Cannot handle SIGTERM!\n");
+		exit (EXIT_FAILURE);
+	}
+	
+	if(sigaction(SIGCHLD, &sigAct, NULL) < 0) {
+		fprintf (stderr, "Cannot handle SIGCHLD!\n");
+		exit (EXIT_FAILURE);
+	}
+#endif
+}
+
+void main(int argc, char *argv[])
+{
+	int option = 0;
+	int retVal = 0;
+	union semun arg;
+
+	/* /media/sunil/02C6FF22C6FF151F/Songs/mixed */	
+	
+	registerSignalHandlers();
 	
 	if( argc < 2)
 	{
@@ -480,13 +733,33 @@ void main(int argc, char *argv[])
 	else
 		//Use the user supplied start dir
 		memcpy(rmPlayer.curDir, argv[1], strlen(argv[1]));
+	
+	rmPlayer.devRandFd = open("/dev/urandom", O_RDONLY|O_NONBLOCK);
+	
+	if(rmPlayer.devRandFd < 0)
+	{
+		printf("\n At startup, failed to open /dev/urandom, exiting... \n");
+		exit(1);
+	}
+	
+	srand(GetRandomNumber());
 
-	srand(time(NULL));
     
     UpdatePlayerInstance();
     
     rmPlayer.playbackState = PLAYBACK_INVALID;
     rmPlayer.playerPid = 0;
+    
+    rmPlayer.semId = rm_sem_init();
+    
+    /* initialize semaphore #0 to 1: */ 
+    arg.val = 0; 
+    if (semctl(rmPlayer.semId, 0, SETVAL, arg) == -1) { 
+		perror("semctl"); 
+        exit(1); 
+    } 
+    
+    rm_sem_dispval(rmPlayer.semId, 0);
 
 	do
 	{
