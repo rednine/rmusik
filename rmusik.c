@@ -446,9 +446,9 @@ int UpdatePlayerInstance()
 			{
 				//Update the state varibles w.r.t curDir
 				rmPlayer.isRoot = (!strcmp(rmPlayer.curDir, "/"));
-				rmPlayer.hasNoChildDir = ((rmPlayer.numDirs <= 0) && (rmPlayer.numFiles > 0));
-				rmPlayer.containsNoFiles = ((rmPlayer.numDirs > 0) && (rmPlayer.numFiles <= 0));
-				rmPlayer.isEmpty = ((rmPlayer.numDirs <= 0) && (rmPlayer.numFiles <= 0));
+				rmPlayer.hasNoChildDir = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles > 0));
+				rmPlayer.containsNoFiles = ((rmPlayer.numDirs > 2) && (rmPlayer.numFiles <= 0));
+				rmPlayer.isEmpty = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles <= 0));
 			}
 		}
 		else
