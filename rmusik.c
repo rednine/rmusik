@@ -154,6 +154,42 @@ int ChooseNextAction(int actionMask)
 	return retVal;
 }
 
+bool IsMp3File(char *file)
+{
+	bool found = false;
+	char *saveptr = NULL, *token = NULL, *tmpStr = NULL, *tmpStr1 = NULL;
+	
+	tmpStr = (char *)malloc(sizeof(char) * 2048);
+	
+	if(!tmpStr)
+	{
+		printf("\n %s : %d Malloc failed, exiting...\n", __FUNCTION__, __LINE__);
+		exit(1);
+	}
+	
+	tmpStr1 = tmpStr;
+	
+	strcpy(tmpStr, file);
+	
+	for(tmpStr; token = strtok_r(tmpStr, FILE_EXTENSION_DELIM_STR, &saveptr); tmpStr=NULL)
+	{									
+		if(token)
+		{
+			if(!strcmp(token, SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR))
+			{
+				printf("\n %s is a MP3 file\n", file);
+				found = true;
+				break;
+			}
+		}
+	}
+	
+	if(tmpStr1)
+		free(tmpStr1);	
+		
+	return found;			
+}
+
 void CheckErrNo()
 {
 	/* check and print errno*/
@@ -317,36 +353,7 @@ int SelectRandomDirEntry(dirEntry_t entry)
 				
 				printf("\n Selected file %s , checking...\n", rmPlayer.dirEntries[dirIndex].entryName);
 				
-				bool found = false;
-				char *saveptr = NULL, *token = NULL, *tmpStr = NULL;
-				
-				tmpStr = (char *)malloc(sizeof(char) * sizeof(rmPlayer.dirEntries[dirIndex].entryName));
-				
-				if(!tmpStr)
-				{
-					printf("\n %s : %d Malloc failed, exiting...\n", __FUNCTION__, __LINE__);
-					exit(1);
-				}
-				
-				strcpy(tmpStr, rmPlayer.dirEntries[dirIndex].entryName);
-				
-				for(tmpStr; token = strtok_r(tmpStr, FILE_EXTENSION_DELIM_STR, &saveptr); tmpStr=NULL)
-				{									
-					if(token)
-					{
-						if(!strcmp(token, SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR))
-						{
-							//printf("\n %s is a MP3 file\n", rmPlayer.dirEntries[dirIndex].entryName);
-							found = true;
-							break;
-						}
-					}
-				}
-				
-				if(tmpStr)
-					free(tmpStr);
-				
-				if(found == true)
+				if(IsMp3File(rmPlayer.dirEntries[dirIndex].entryName) == true)
 					break;	//Some mp3 file has been found
 				else
 					continue; //Some non mp3 file has been found, continue search
@@ -476,7 +483,8 @@ int UpdatePlayerInstance()
 					}
 					else if (rmPlayer.dirEntries[index].entryType == DIR_ENTRY_TYPE_FILE)
 					{
-						rmPlayer.numFiles++;
+						if(IsMp3File(rmPlayer.dirEntries[index].entryName) == true)
+							rmPlayer.numFiles++;
 						//printf("\n %s : Found file numFiles = %d\n", __FUNCTION__, rmPlayer.numFiles);
 					}
 					else
