@@ -18,6 +18,7 @@
 #include <fcntl.h>
 
 /* Datatypes */
+typedef enum _bool {false, true} bool;
 
 /* https://www.experts-exchange.com/questions/23250824/TCP-server-in-C-How-to-avoid-Interrupted-system-call.html */
 
@@ -28,6 +29,9 @@
 #define RM_MSG_Q_KEY      (('r'<<24) | ('m'<<16) | ('s'<<8) | ('e'))
 #define MAX_RETRIES       10
 
+#define SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR "mp3"
+#define FILE_EXTENSION_DELIM_STR                  "."
+ 
 union semun {
     int val;
     struct semid_ds *buf;
@@ -82,7 +86,9 @@ typedef struct
 
 /* Global variables */
 #define IS_VALID_ACTION(a) (((a) == ACT_GO_DOWN) || ((a) == ACT_GO_UP) || ((a) == ACT_FILE_PLAY))
+
 playerInstance_t rmPlayer;
+
 extern int errno;
 
 /************ Functions ***************/
@@ -297,11 +303,55 @@ int SelectRandomDirEntry(dirEntry_t entry)
 		
 		//printf("\n %s : numEntries = %d dirIndex = %d \n", __FUNCTION__, numEntries, dirIndex);
 
-		if((dirIndex >=0 && dirIndex <numEntries) &&
-				(entry == rmPlayer.dirEntries[dirIndex].entryType) &&
-				(strcmp(rmPlayer.dirEntries[dirIndex].entryName, ".") != 0) &&
-				(strcmp(rmPlayer.dirEntries[dirIndex].entryName, "..") != 0))
-			break;
+		if((dirIndex >=0 && dirIndex <numEntries) && (entry == rmPlayer.dirEntries[dirIndex].entryType))
+		{
+			if(rmPlayer.dirEntries[dirIndex].entryType == DIR_ENTRY_TYPE_DIR)
+			{
+				if((strcmp(rmPlayer.dirEntries[dirIndex].entryName, ".") != 0) &&
+							(strcmp(rmPlayer.dirEntries[dirIndex].entryName, "..") != 0))
+				break;
+			}
+			else //if(rmPlayer.dirEntries[dirIndex].entryType == DIR_ENTRY_TYPE_FILE)
+			{
+				//TODO: Make sure the same file is not chosen again...
+				
+				printf("\n Selected file %s , checking...\n", rmPlayer.dirEntries[dirIndex].entryName);
+				
+				bool found = false;
+				char *saveptr = NULL, *token = NULL, *tmpStr = NULL;
+				
+				tmpStr = (char *)malloc(sizeof(char) * sizeof(rmPlayer.dirEntries[dirIndex].entryName));
+				
+				if(!tmpStr)
+				{
+					printf("\n %s : %d Malloc failed, exiting...\n", __FUNCTION__, __LINE__);
+					exit(1);
+				}
+				
+				strcpy(tmpStr, rmPlayer.dirEntries[dirIndex].entryName);
+				
+				for(tmpStr; token = strtok_r(tmpStr, FILE_EXTENSION_DELIM_STR, &saveptr); tmpStr=NULL)
+				{									
+					if(token)
+					{
+						if(!strcmp(token, SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR))
+						{
+							//printf("\n %s is a MP3 file\n", rmPlayer.dirEntries[dirIndex].entryName);
+							found = true;
+							break;
+						}
+					}
+				}
+				
+				if(tmpStr)
+					free(tmpStr);
+				
+				if(found == true)
+					break;	//Some mp3 file has been found
+				else
+					continue; //Some non mp3 file has been found, continue search
+			}
+		}
 	}
 
 	return dirIndex;
@@ -310,13 +360,13 @@ int SelectRandomDirEntry(dirEntry_t entry)
 void StartPlayBack()
 {	
 	char *argv[3];
-	char cmdBuf[2048];
+	//char cmdBuf[2048];
 	
 	printf("\n %s : Starting to playback %s [PID=%d]\n", __FUNCTION__, rmPlayer.nextSong, getpid());
 	
-	memset(cmdBuf, 0x00, (sizeof(char) * 2048));
+	//memset(cmdBuf, 0x00, (sizeof(char) * 2048));
 	
-	sprintf(cmdBuf, "-q %s", rmPlayer.nextSong);
+	//sprintf(cmdBuf, "-q %s", rmPlayer.nextSong);
 	
 	argv[0] = "mpg321";
 	argv[1] = rmPlayer.nextSong;
@@ -480,7 +530,7 @@ int SelectParentDir()
 		//printf("\n %s : strPrt = %s\n", __FUNCTION__, strPtr);	
 		if((len == 1)  && (strPtr[0] == '/'))
 		{
-			//We have already at root, then dont strip the '/'
+			//We are already at root, then dont strip the '/'
 			return 0;
 		}
 		else
@@ -630,6 +680,7 @@ void sigaction_handler(int signo, siginfo_t * siginfo, void *data)
 
 static void signal_handler (int signo)
 {
+	#if 0
 	if((signo == SIGINT) || (signo == SIGTERM))
 	{
 		printf("\n %s : SIGINT/SIGTERM received  - killing child player process...\n", __FUNCTION__);
@@ -654,6 +705,7 @@ static void signal_handler (int signo)
 	}	
 	else
 		printf("\n %s : Unknown or unhandled signal %d\n", __FUNCTION__, signo);
+	#endif
 }
 
 void registerSignalHandlers()
@@ -716,8 +768,6 @@ void main(int argc, char *argv[])
 	int option = 0;
 	int retVal = 0;
 	union semun arg;
-
-	/* /media/sunil/02C6FF22C6FF151F/Songs/mixed */	
 	
 	registerSignalHandlers();
 	
@@ -738,7 +788,7 @@ void main(int argc, char *argv[])
 	
 	if(rmPlayer.devRandFd < 0)
 	{
-		printf("\n At startup, failed to open /dev/urandom, exiting... \n");
+		printf("\nFailed to open /dev/urandom, exiting... \n");
 		exit(1);
 	}
 	
