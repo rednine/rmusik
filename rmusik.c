@@ -41,10 +41,10 @@ union semun {
 typedef enum
 {
 	ACT_GO_DOWN    = 1,
-	ACT_GO_UP      = (1 << 1),
-	ACT_FILE_PLAY  = (1 << 2),
-	ACT_SELECT_DIR = (1 << 3),
-	ACT_MAX		   = (1 << 4)
+	ACT_GO_UP      = (1 << 1),	//2
+	ACT_FILE_PLAY  = (1 << 2),	//4
+	ACT_SELECT_DIR = (1 << 3),	//8
+	ACT_MAX		   = (1 << 4)	//16
 }playerAction_t;
 
 typedef enum
@@ -91,7 +91,24 @@ playerInstance_t rmPlayer;
 
 extern int errno;
 
+#define PRINT_ENUM(e) #e
+
 /************ Functions ***************/
+
+char *printActionStr(playerAction_t a)
+{
+	switch(a)
+	{
+		case ACT_GO_DOWN: 		return "ACT_GO_DOWN";
+		case ACT_GO_UP: 		return "ACT_GO_UP";
+		case ACT_FILE_PLAY: 	return "ACT_FILE_PLAY";
+		case ACT_SELECT_DIR: 	return "ACT_SELECT_DIR";
+		
+		default:
+		case ACT_MAX: 
+			return "Unknown action";
+	}
+}
 
 int GetRandomNumber()
 {	
@@ -118,6 +135,8 @@ int GetNextActionMask()
 		actionMask = ACT_GO_UP | ACT_FILE_PLAY;
 	else if (rmPlayer.hasNoChildDir <=0 && rmPlayer.containsNoFiles > 0)
 		actionMask = ACT_GO_DOWN;
+	else if (rmPlayer.hasNoChildDir <=0 && rmPlayer.containsNoFiles <= 0)
+		actionMask = ACT_GO_DOWN | ACT_FILE_PLAY;
 	else
 		actionMask = ACT_GO_UP | ACT_GO_DOWN | ACT_FILE_PLAY;
 
@@ -136,8 +155,7 @@ int ChooseNextAction(int actionMask)
 	{
 		randAction = rand();
 		//randAction = GetRandomNumber();
-		action = randAction % ACT_MAX;//MAX_ACTIONS;
-		//printf("\n %s : action = %d randAction = %X actionMask & action = %d\n", __FUNCTION__, action, randAction, (actionMask & action)); 
+		action = randAction % ACT_MAX;		
 
 		if(IS_VALID_ACTION(action))
 		{
@@ -145,6 +163,7 @@ int ChooseNextAction(int actionMask)
 			//now check with mask
 			if((actionMask & action) == action)
 			{
+				printf("\n %s : action = %d randAction = %X actionMask & action = %s\n", __FUNCTION__, action, randAction, printActionStr(actionMask & action)); 
 				retVal = action;
 				break;
 			}
@@ -177,7 +196,7 @@ bool IsMp3File(char *file)
 		{
 			if(!strcmp(token, SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR))
 			{
-				printf("\n %s is a MP3 file\n", file);
+				//printf("\n %s is a MP3 file\n", file);
 				found = true;
 				break;
 			}
@@ -581,33 +600,67 @@ int SelectChildDir()
 	return 0;
 }
 
-int SelectNextSongDir()
+int SelectNextSong()
 {
 	int retVal = 0;
-	playerAction_t nextAction = 0;
-
+	playerAction_t nextAction = 0, prevAction = 0;
+	bool isDirChanged = false;
+	playerAction_t prevNavAction = 0;
+	
+	//We force to start from a different directory, to avoid playing from the same directory...
+	
 	while(1)
 	{
-		//Get all possible actions at this level
+		//Get all possible actions at this level		
 		int actionMask = GetNextActionMask();
-		printf("\n %s : Get Next Action Mask = %d \n", __FUNCTION__, actionMask);
+		
+		printf("\n %s : action mask from GetNextActionMask = %d", __FUNCTION__, actionMask);
+		
+		// Adjust actionMask only when multiple actions are possible
+		// if not, just do what actionMask says	
+		if(!((actionMask == ACT_GO_DOWN) || (actionMask == ACT_GO_UP)))
+		{
+			if(prevNavAction == ACT_GO_DOWN)
+				actionMask &= ~(ACT_GO_UP);
+			else if(prevNavAction == ACT_GO_UP)
+				actionMask &= ~(ACT_GO_DOWN);
+			else
+			{
+				//First Run of this function
+			}
+		}
+		
 		nextAction = ChooseNextAction(actionMask);
-
+		prevAction = nextAction;
+		
 		if(nextAction == ACT_GO_DOWN)
 		{
-			//printf("\n %s : Selecting Child Dir\n", __FUNCTION__);
+			printf("\n %s : Selecting Child Dir\n", __FUNCTION__);
 			SelectChildDir();
 			if (UpdatePlayerInstance() < 0)
-				continue;
+				isDirChanged = false;
+			else
+				isDirChanged = true;				
+				
+			prevNavAction = nextAction;
+			
+			continue;
 		}
 		else if(nextAction == ACT_GO_UP)
 		{
-			//printf("\n %s : Selecting Parent Dir\n", __FUNCTION__);
+			printf("\n %s : Selecting Parent Dir\n", __FUNCTION__);
 			SelectParentDir();
+
 			if (UpdatePlayerInstance() < 0)
-				continue;
+				isDirChanged = false;
+			else
+				isDirChanged = true;
+			
+			prevNavAction = nextAction;
+
+			continue;
 		}
-		else if(nextAction == ACT_FILE_PLAY)
+		else if((nextAction == ACT_FILE_PLAY) && (isDirChanged == true))
 		{
 			printf("\n %s : Selecting Play file\n", __FUNCTION__);
 			//Its now ACT_FILE_PLAY, that means a next dir has been selected, select a song now
@@ -771,7 +824,7 @@ void registerSignalHandlers()
 #endif
 }
 
-void main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	int option = 0;
 	int retVal = 0;
@@ -827,7 +880,7 @@ void main(int argc, char *argv[])
 		{
 				case 1:
 				{
-					SelectNextSongDir();
+					SelectNextSong();
 					printf("\n Next Song %s, previous song %s\n", rmPlayer.nextSong, rmPlayer.prevSong);
 					break;
 				}
