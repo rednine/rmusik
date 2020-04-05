@@ -71,6 +71,7 @@ typedef struct
 	char prevSong[RM_MAX_PATH_LEN];
 	char curSong[RM_MAX_PATH_LEN];
 	char curDir[RM_MAX_PATH_LEN];
+	char startingDir[RM_MAX_PATH_LEN];
 	int numDirs;
 	int numFiles;
 	struct
@@ -82,6 +83,8 @@ typedef struct
 	pid_t playerPid;
 	int semId;
 	int devRandFd;
+	playerAction_t nextAction;
+	playerAction_t prevAction;
 }playerInstance_t;
 
 /* Global variables */
@@ -127,6 +130,7 @@ int GetNextActionMask()
 {
 	int actionMask = 0;
 
+
 	if(rmPlayer.isRoot > 0)
 		actionMask = ACT_GO_DOWN;
 	else if (rmPlayer.isEmpty > 0)
@@ -134,12 +138,16 @@ int GetNextActionMask()
 	else if(rmPlayer.hasNoChildDir > 0 && rmPlayer.containsNoFiles <= 0)
 		actionMask = ACT_GO_UP | ACT_FILE_PLAY;
 	else if (rmPlayer.hasNoChildDir <=0 && rmPlayer.containsNoFiles > 0)
-		actionMask = ACT_GO_DOWN;
+		actionMask = ACT_GO_UP | ACT_GO_DOWN;
 	else if (rmPlayer.hasNoChildDir <=0 && rmPlayer.containsNoFiles <= 0)
-		actionMask = ACT_GO_DOWN | ACT_FILE_PLAY;
-	else
 		actionMask = ACT_GO_UP | ACT_GO_DOWN | ACT_FILE_PLAY;
+	else
+	{
+		actionMask = ACT_GO_UP | ACT_GO_DOWN | ACT_FILE_PLAY;
+		printf("\n Add all - Default case");
+	}
 
+	//printf("\n isRoot %d hasNoChildDir %d containsNoFiles %d actionMask %d", rmPlayer.isRoot, rmPlayer.hasNoChildDir, rmPlayer.containsNoFiles, actionMask);
 	return actionMask;
 }
 
@@ -163,7 +171,7 @@ int ChooseNextAction(int actionMask)
 			//now check with mask
 			if((actionMask & action) == action)
 			{
-				printf("\n %s : action = %d randAction = %X actionMask & action = %s\n", __FUNCTION__, action, randAction, printActionStr(actionMask & action)); 
+				printf("\n %s : action = %d randAction = 0x%X actionMask & action = %s\n", __FUNCTION__, action, randAction, printActionStr(actionMask & action)); 
 				retVal = action;
 				break;
 			}
@@ -213,6 +221,24 @@ void CheckErrNo()
 {
 	/* check and print errno*/
 	printf("\n %s : error = %d %s \n", __FUNCTION__, errno, strerror(errno));
+}
+
+int CheckIsAtStartingDir(char *curDir, char *startingDir)
+{
+	char aCurDir[RM_MAX_PATH_LEN];
+	char aStartingDir[RM_MAX_PATH_LEN];
+
+	memcpy(aCurDir, curDir, RM_MAX_PATH_LEN);
+	memcpy(aStartingDir, startingDir, RM_MAX_PATH_LEN);
+
+	//strip off the tailing '/' in the starting dir if present
+	if(aStartingDir[strlen(aStartingDir) - 1] == '/')
+		aStartingDir[strlen(aStartingDir) - 1] = '\0';
+
+	if(aCurDir[strlen(aCurDir) - 1] == '/')
+		aCurDir[strlen(aCurDir) - 1] = '\0';
+
+	return (strcmp(aCurDir, aStartingDir) == 0);
 }
 
 /*
@@ -522,10 +548,11 @@ int UpdatePlayerInstance()
 			else
 			{
 				//Update the state varibles w.r.t curDir
-				rmPlayer.isRoot = (!strcmp(rmPlayer.curDir, "/"));
+				rmPlayer.isRoot = CheckIsAtStartingDir(rmPlayer.curDir, rmPlayer.startingDir);
 				rmPlayer.hasNoChildDir = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles > 0));
 				rmPlayer.containsNoFiles = ((rmPlayer.numDirs > 2) && (rmPlayer.numFiles <= 0));
 				rmPlayer.isEmpty = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles <= 0));
+				//printf("\n @ isRoot check curDir = %s startingDir = %s isRoot %d", rmPlayer.curDir, rmPlayer.startingDir, rmPlayer.isRoot);
 			}
 		}
 		else
@@ -554,7 +581,6 @@ int SelectParentDir()
 		int len = strlen(rmPlayer.curDir);
 		char *strPtr = rmPlayer.curDir + (len-1);
 		
-		//printf("\n %s : strPrt = %s\n", __FUNCTION__, strPtr);	
 		if((len == 1)  && (strPtr[0] == '/'))
 		{
 			//We are already at root, then dont strip the '/'
@@ -603,66 +629,93 @@ int SelectChildDir()
 int SelectNextSong()
 {
 	int retVal = 0;
-	playerAction_t nextAction = 0, prevAction = 0;
 	bool isDirChanged = false;
-	playerAction_t prevNavAction = 0;
+	int actionMask = 0;
+
+	rmPlayer.nextAction = 0;
+	rmPlayer.prevAction = 0;
 	
 	//We force to start from a different directory, to avoid playing from the same directory...
 	
 	while(1)
 	{
 		//Get all possible actions at this level		
-		int actionMask = GetNextActionMask();
+		actionMask = GetNextActionMask();
 		
-		printf("\n %s : action mask from GetNextActionMask = %d", __FUNCTION__, actionMask);
-		
-		// Adjust actionMask only when multiple actions are possible
-		// if not, just do what actionMask says	
-		if(!((actionMask == ACT_GO_DOWN) || (actionMask == ACT_GO_UP)))
+		// if only one action is possible
+		if((actionMask == ACT_GO_DOWN) || (actionMask == ACT_GO_UP))
 		{
-			if(prevNavAction == ACT_GO_DOWN)
+			// just do what actionMask says	
+		}
+		else
+		{
+			// Adjust actionMask only when multiple actions are possible
+			if(rmPlayer.prevAction == ACT_GO_DOWN)
 				actionMask &= ~(ACT_GO_UP);
-			else if(prevNavAction == ACT_GO_UP)
+			else if(rmPlayer.prevAction == ACT_GO_UP)
 				actionMask &= ~(ACT_GO_DOWN);
 			else
 			{
+				//printf("\n%s : not adjusting actionMask", __FUNCTION__);
 				//First Run of this function
 			}
 		}
 		
-		nextAction = ChooseNextAction(actionMask);
-		prevAction = nextAction;
+		//printf("\n %s : Adjusted actionMask %d", __FUNCTION__, actionMask);
 		
-		if(nextAction == ACT_GO_DOWN)
+		rmPlayer.nextAction = ChooseNextAction(actionMask);
+		
+		if(rmPlayer.nextAction == ACT_GO_DOWN)
 		{
 			printf("\n %s : Selecting Child Dir\n", __FUNCTION__);
 			SelectChildDir();
+			
 			if (UpdatePlayerInstance() < 0)
+			{
 				isDirChanged = false;
-			else
-				isDirChanged = true;				
-				
-			prevNavAction = nextAction;
+			}
+			else 
+			{
+				if (rmPlayer.isEmpty <= 0)
+				{
+					isDirChanged = true;			
+					rmPlayer.prevAction = rmPlayer.nextAction;
+				}
+				else
+				{
+					//empty dir
+					printf("\n %s: Empty dir %s, will try again...", __FUNCTION__, rmPlayer.curDir);
+				}
+			}
 			
 			continue;
 		}
-		else if(nextAction == ACT_GO_UP)
+		else if(rmPlayer.nextAction == ACT_GO_UP)
 		{
 			printf("\n %s : Selecting Parent Dir\n", __FUNCTION__);
 			SelectParentDir();
 
 			if (UpdatePlayerInstance() < 0)
+			{
 				isDirChanged = false;
+			}
 			else
+			{
+				rmPlayer.prevAction = rmPlayer.nextAction;
 				isDirChanged = true;
-			
-			prevNavAction = nextAction;
 
-			continue;
+				if(rmPlayer.isRoot)
+				{
+					printf("\n Have reached the starting dir...");
+				}
+				
+				continue;
+			}
 		}
-		else if((nextAction == ACT_FILE_PLAY) && (isDirChanged == true))
+		else if((rmPlayer.nextAction == ACT_FILE_PLAY) /* && (isDirChanged == true) */)
 		{
 			printf("\n %s : Selecting Play file\n", __FUNCTION__);
+			
 			//Its now ACT_FILE_PLAY, that means a next dir has been selected, select a song now
 			int index = SelectRandomDirEntry(DIR_ENTRY_TYPE_FILE);
 			memset(rmPlayer.prevSong, 0x0, sizeof(rmPlayer.prevSong));
@@ -677,6 +730,7 @@ int SelectNextSong()
 		else
 		{
 			//unhandled case
+			printf("\n %s : Action = %s isDirChanged = %s\n", __FUNCTION__, printActionStr(rmPlayer.nextAction), (isDirChanged == true)? "true" : "false");
 		}
 	}
 
@@ -842,8 +896,11 @@ int main(int argc, char *argv[])
 		}
 	}
 	else
+	{
 		//Use the user supplied start dir
 		memcpy(rmPlayer.curDir, argv[1], strlen(argv[1]));
+		memcpy(rmPlayer.startingDir, argv[1], strlen(argv[1]));
+	}
 	
 	rmPlayer.devRandFd = open("/dev/urandom", O_RDONLY|O_NONBLOCK);
 	
@@ -854,7 +911,6 @@ int main(int argc, char *argv[])
 	}
 	
 	srand(GetRandomNumber());
-
     
     UpdatePlayerInstance();
     
@@ -874,7 +930,7 @@ int main(int argc, char *argv[])
 
 	do
 	{
-		printf("\n1. Choose next song \n2. Play song \n3. Exit\nEnter your option: Parent process = %d", getpid());
+		printf("\n1. Choose next song \n2. Play song \n3. Exit\nEnter your option: ");
 		scanf("%d", &option);
 		switch(option)
 		{
@@ -894,7 +950,7 @@ int main(int argc, char *argv[])
 				{
 					printf("\n Exiting...\n");
 					retVal = ExitPlayer();
-					break;
+					exit(0);
 				}
 				default:
 				{
@@ -902,7 +958,7 @@ int main(int argc, char *argv[])
 					break;
 				}
 		}
-	}while(option != 3);
+	}while(true);
 
 	exit(retVal);
 }
