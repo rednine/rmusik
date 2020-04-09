@@ -3,6 +3,7 @@
 //Random Music Player - rmusik
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -98,6 +99,28 @@ extern int errno;
 
 /************ Functions ***************/
 
+void rm_dbg_print(const char *fmt, ...)
+{
+        char p[1024];
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(p, 1024, fmt, ap);
+        va_end(ap);
+        fprintf(stdout, "%s", p);
+}
+
+int get_dbg_level()
+{
+    char *str_level = getenv("RM_DBG");
+    int level = str_level ? atoi(str_level) : 0;    
+    //printf("\n get_dbg_level = %d", level);
+    return level;
+}
+
+#define DBG_ERROR(x)    { /*if((4 & get_dbg_level()) == 4)*/ rm_dbg_print x; }	//Always print errors
+#define DBG_WARNING(x)  { if((2 & get_dbg_level()) == 2) rm_dbg_print x; }
+#define DBG_INFO(x)     { if((1 & get_dbg_level()) == 1) rm_dbg_print x; }
+
 char *printActionStr(playerAction_t a)
 {
 	switch(a)
@@ -119,7 +142,7 @@ int GetRandomNumber()
 	int result = read(rmPlayer.devRandFd, (void *)data, 1);
 	if(result < 0)
 	{
-		printf("\n GetRandomNumber : failed to read /dev/urandom, falling back to rand()\n");
+		DBG_ERROR(("\n GetRandomNumber : failed to read /dev/urandom, falling back to rand()\n"));
 		return rand();
 	}
 	
@@ -144,7 +167,7 @@ int GetNextActionMask()
 	else
 	{
 		actionMask = ACT_GO_UP | ACT_GO_DOWN | ACT_FILE_PLAY;
-		printf("\n Add all - Default case");
+		DBG_INFO(("\n Add all - Default case"));
 	}
 
 	//printf("\n isRoot %d hasNoChildDir %d containsNoFiles %d actionMask %d", rmPlayer.isRoot, rmPlayer.hasNoChildDir, rmPlayer.containsNoFiles, actionMask);
@@ -171,7 +194,7 @@ int ChooseNextAction(int actionMask)
 			//now check with mask
 			if((actionMask & action) == action)
 			{
-				printf("\n %s : action = %d randAction = 0x%X actionMask & action = %s\n", __FUNCTION__, action, randAction, printActionStr(actionMask & action)); 
+				DBG_INFO(("\n %s : action = %d randAction = 0x%X actionMask & action = %s\n", __FUNCTION__, action, randAction, printActionStr(actionMask & action))); 
 				retVal = action;
 				break;
 			}
@@ -190,7 +213,7 @@ bool IsMp3File(char *file)
 	
 	if(!tmpStr)
 	{
-		printf("\n %s : %d Malloc failed, exiting...\n", __FUNCTION__, __LINE__);
+		DBG_ERROR(("\n %s : %d Malloc failed, exiting...\n", __FUNCTION__, __LINE__));
 		exit(1);
 	}
 	
@@ -204,7 +227,6 @@ bool IsMp3File(char *file)
 		{
 			if(!strcmp(token, SUPPORTED_AUDIO_FILE_FORMAT_EXTENSION_STR))
 			{
-				//printf("\n %s is a MP3 file\n", file);
 				found = true;
 				break;
 			}
@@ -314,7 +336,7 @@ void rm_sem_dispval(int semid, int member)
         int semval;
 
         semval = semctl(semid, member, GETVAL, 0);
-        printf("\n %s : semval for member %d is %d\n", __FUNCTION__, member, semval);
+        //DBG_INFO(("\n %s : semval for member %d is %d\n", __FUNCTION__, member, semval));
 }
 
 void rm_sem_wait()
@@ -335,7 +357,7 @@ void rm_sem_wait()
 			if (semop(rmPlayer.semId, &sb, 1) == -1)
 				CheckErrNo();
 			else
-				printf("\n %s : sem_wait OK...\n", __FUNCTION__);
+				DBG_INFO(("\n %s : sem_wait OK...\n", __FUNCTION__));
 		}
 		else
 			CheckErrNo();
@@ -355,7 +377,7 @@ void rm_sem_post()
         CheckErrNo();
     }
     else
-		printf("\n %s : sem_post OK...\n", __FUNCTION__);
+		DBG_INFO(("\n %s : sem_post OK...\n", __FUNCTION__));
 		
 	rm_sem_dispval(rmPlayer.semId, 0);	
 }
@@ -369,7 +391,7 @@ void rm_sem_destroy()
         CheckErrNo();
     }
     else
-		printf("\n %s : sem_destroy OK...\n", __FUNCTION__);
+		DBG_INFO(("\n %s : sem_destroy OK...\n", __FUNCTION__));
 }
 
 int SelectRandomDirEntry(dirEntry_t entry)
@@ -381,8 +403,6 @@ int SelectRandomDirEntry(dirEntry_t entry)
 	{
 		dirIndex = rand() % (numEntries);
 		//dirIndex = GetRandomNumber() % (numEntries);
-		
-		//printf("\n %s : numEntries = %d dirIndex = %d \n", __FUNCTION__, numEntries, dirIndex);
 
 		if((dirIndex >=0 && dirIndex <numEntries) && (entry == rmPlayer.dirEntries[dirIndex].entryType))
 		{
@@ -396,7 +416,7 @@ int SelectRandomDirEntry(dirEntry_t entry)
 			{
 				//TODO: Make sure the same file is not chosen again...
 				
-				printf("\n Selected file %s , checking...\n", rmPlayer.dirEntries[dirIndex].entryName);
+				DBG_INFO(("\n Selected file %s , checking...\n", rmPlayer.dirEntries[dirIndex].entryName));
 				
 				if(IsMp3File(rmPlayer.dirEntries[dirIndex].entryName) == true)
 					break;	//Some mp3 file has been found
@@ -414,7 +434,7 @@ void StartPlayBack()
 	char *argv[3];
 	//char cmdBuf[2048];
 	
-	printf("\n %s : Starting to playback %s [PID=%d]\n", __FUNCTION__, rmPlayer.nextSong, getpid());
+	DBG_INFO(("\n %s : Starting to playback %s [PID=%d]\n", __FUNCTION__, rmPlayer.nextSong, getpid()));
 	
 	//memset(cmdBuf, 0x00, (sizeof(char) * 2048));
 	
@@ -435,14 +455,14 @@ void PlaySong()
 		if(kill(rmPlayer.playerPid, SIGKILL)!=0)
 		{
 			CheckErrNo();
-			printf("\n %s : Unable to kill previous player process, exiting...\n", __FUNCTION__);
+			DBG_ERROR(("\n %s : Unable to kill previous player process, exiting...\n", __FUNCTION__));
 			exit(-1);
 		}
 		else
 		{
 			//wait for previous song to have ended
 			rm_sem_wait();
-			printf("\n %s : Killed child player process..\n", __FUNCTION__);
+			DBG_INFO(("\n %s : Killed child player process..\n", __FUNCTION__));
 			rmPlayer.playbackState = PLAYBACK_STOPPED;
 		}
 	}
@@ -461,7 +481,7 @@ void PlaySong()
 	else
 	{
 		//Parent process
-		printf("\n %s : playback process created [PID=%d] [CH PID = %d]\n", __FUNCTION__, getpid(), rmPlayer.playerPid);
+		DBG_INFO(("\n %s : playback process created [PID=%d] [CH PID = %d]\n", __FUNCTION__, getpid(), rmPlayer.playerPid));
 		rmPlayer.playbackState = PLAYBACK_PLAYING;
 	}
 }
@@ -471,7 +491,7 @@ int UpdatePlayerInstance()
 	int retVal = 0;
 	struct stat sb;
 	
-	printf("\n %s : Scanning %s ...\n", __FUNCTION__, rmPlayer.curDir);
+	DBG_INFO(("\n %s : Scanning %s ...\n", __FUNCTION__, rmPlayer.curDir));
 	
 	rmPlayer.isRoot = -1;
 	rmPlayer.hasNoChildDir = -1;
@@ -508,7 +528,7 @@ int UpdatePlayerInstance()
 					strcat(name, "/");
 				strcat(name, dirEntry->d_name);
 				
-				//printf("\n %s : Got entry %s\n", __FUNCTION__, name);
+				//DBG_INFO(("\n %s : Got entry %s\n", __FUNCTION__, name));
 				
 				if(stat(name, &sb) < 0)
 				{
@@ -524,16 +544,16 @@ int UpdatePlayerInstance()
 					if(rmPlayer.dirEntries[index].entryType == DIR_ENTRY_TYPE_DIR)
 					{
 						rmPlayer.numDirs++;
-						//printf("\n %s : Found dir numDirs = %d\n", __FUNCTION__, rmPlayer.numDirs);
+						//DBG_INFO(("\n %s : Found dir numDirs = %d\n", __FUNCTION__, rmPlayer.numDirs));
 					}
 					else if (rmPlayer.dirEntries[index].entryType == DIR_ENTRY_TYPE_FILE)
 					{
 						if(IsMp3File(rmPlayer.dirEntries[index].entryName) == true)
 							rmPlayer.numFiles++;
-						//printf("\n %s : Found file numFiles = %d\n", __FUNCTION__, rmPlayer.numFiles);
+						//DBG_INFO(("\n %s : Found file numFiles = %d\n", __FUNCTION__, rmPlayer.numFiles));
 					}
 					else
-						printf("\n %s : Found OTHER TYPE = %d %d\n", __FUNCTION__, /*(sb.st_mode & S_IFMT == S_IFDIR)*/S_ISDIR(sb.st_mode), /*(sb.st_mode & S_IFMT == S_IFREG)*/S_ISREG(sb.st_mode));
+						DBG_ERROR(("\n %s : Found OTHER TYPE = %d %d\n", __FUNCTION__, /*(sb.st_mode & S_IFMT == S_IFDIR)*/S_ISDIR(sb.st_mode), /*(sb.st_mode & S_IFMT == S_IFREG)*/S_ISREG(sb.st_mode)));
 
 					index++;
 				}
@@ -541,7 +561,7 @@ int UpdatePlayerInstance()
 
 			if(errno && errno != EINTR)
 			{
-				printf("\n %s : %d : Error reading dir entries of %s \n", __FUNCTION__, __LINE__, rmPlayer.curDir);
+				DBG_ERROR(("\n %s : %d : Error reading dir entries of %s \n", __FUNCTION__, __LINE__, rmPlayer.curDir));
 				CheckErrNo();
 				return -1;
 			}
@@ -552,12 +572,12 @@ int UpdatePlayerInstance()
 				rmPlayer.hasNoChildDir = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles > 0));
 				rmPlayer.containsNoFiles = ((rmPlayer.numDirs > 2) && (rmPlayer.numFiles <= 0));
 				rmPlayer.isEmpty = ((rmPlayer.numDirs <= 2) && (rmPlayer.numFiles <= 0));
-				//printf("\n @ isRoot check curDir = %s startingDir = %s isRoot %d", rmPlayer.curDir, rmPlayer.startingDir, rmPlayer.isRoot);
+				//DBG_INFO(("\n @ isRoot check curDir = %s startingDir = %s isRoot %d", rmPlayer.curDir, rmPlayer.startingDir, rmPlayer.isRoot));
 			}
 		}
 		else
 		{
-			printf("\n %s : %d : Error in opening dir %s\n", __FUNCTION__, __LINE__, rmPlayer.curDir);
+			DBG_ERROR(("\n %s : %d : Error in opening dir %s\n", __FUNCTION__, __LINE__, rmPlayer.curDir));
 			return -1;
 		}
 	}
@@ -598,7 +618,7 @@ int SelectParentDir()
 				
 			*strPtr = '\0';
 			
-			printf("\n %s : Selecting Parent Dir %s\n", __FUNCTION__, rmPlayer.curDir);
+			DBG_INFO(("\n %s : Selecting Parent Dir %s\n", __FUNCTION__, rmPlayer.curDir));
 		}
 	}
 	
@@ -620,7 +640,7 @@ int SelectChildDir()
 		if(rmPlayer.curDir[strlen(rmPlayer.curDir)-1] != '/')
 			strcat(rmPlayer.curDir , "/");
 		strcat(rmPlayer.curDir , rmPlayer.dirEntries[index].entryName);
-		printf("\n %s : Selecting Child Dir %s\n", __FUNCTION__, rmPlayer.dirEntries[index].entryName);
+		//DBG_INFO(("\n %s : Selecting Child Dir %s\n", __FUNCTION__, rmPlayer.dirEntries[index].entryName));
 	}
 
 	return 0;
@@ -656,18 +676,18 @@ int SelectNextSong()
 				actionMask &= ~(ACT_GO_DOWN);
 			else
 			{
-				//printf("\n%s : not adjusting actionMask", __FUNCTION__);
+				//DBG_INFO(("\n%s : not adjusting actionMask", __FUNCTION__));
 				//First Run of this function
 			}
 		}
 		
-		//printf("\n %s : Adjusted actionMask %d", __FUNCTION__, actionMask);
+		//DBG_INFO(("\n %s : Adjusted actionMask %d", __FUNCTION__, actionMask));
 		
 		rmPlayer.nextAction = ChooseNextAction(actionMask);
 		
 		if(rmPlayer.nextAction == ACT_GO_DOWN)
 		{
-			printf("\n %s : Selecting Child Dir\n", __FUNCTION__);
+			DBG_INFO(("\n %s : Selecting Child Dir\n", __FUNCTION__));
 			SelectChildDir();
 			
 			if (UpdatePlayerInstance() < 0)
@@ -684,7 +704,7 @@ int SelectNextSong()
 				else
 				{
 					//empty dir
-					printf("\n %s: Empty dir %s, will try again...", __FUNCTION__, rmPlayer.curDir);
+					DBG_WARNING(("\n %s: Empty dir %s, will try again...", __FUNCTION__, rmPlayer.curDir));
 				}
 			}
 			
@@ -692,7 +712,7 @@ int SelectNextSong()
 		}
 		else if(rmPlayer.nextAction == ACT_GO_UP)
 		{
-			printf("\n %s : Selecting Parent Dir\n", __FUNCTION__);
+			DBG_INFO(("\n %s : Selecting Parent Dir\n", __FUNCTION__));
 			SelectParentDir();
 
 			if (UpdatePlayerInstance() < 0)
@@ -706,7 +726,7 @@ int SelectNextSong()
 
 				if(rmPlayer.isRoot)
 				{
-					printf("\n Have reached the starting dir...");
+					DBG_WARNING(("\n Have reached the starting dir..."));
 				}
 				
 				continue;
@@ -714,7 +734,7 @@ int SelectNextSong()
 		}
 		else if((rmPlayer.nextAction == ACT_FILE_PLAY) /* && (isDirChanged == true) */)
 		{
-			printf("\n %s : Selecting Play file\n", __FUNCTION__);
+			DBG_INFO(("\n %s : Selecting Play file\n", __FUNCTION__));
 			
 			//Its now ACT_FILE_PLAY, that means a next dir has been selected, select a song now
 			int index = SelectRandomDirEntry(DIR_ENTRY_TYPE_FILE);
@@ -730,7 +750,7 @@ int SelectNextSong()
 		else
 		{
 			//unhandled case
-			printf("\n %s : Action = %s isDirChanged = %s\n", __FUNCTION__, printActionStr(rmPlayer.nextAction), (isDirChanged == true)? "true" : "false");
+			DBG_ERROR(("\n %s : Action = %s isDirChanged = %s\n", __FUNCTION__, printActionStr(rmPlayer.nextAction), (isDirChanged == true)? "true" : "false"));
 		}
 	}
 
@@ -762,7 +782,7 @@ void sigaction_handler(int signo, siginfo_t * siginfo, void *data)
 {
 	if((signo == SIGINT) || (signo == SIGTERM))
 	{
-		printf("\n %s : SIGINT/SIGTERM received  - killing child player process...\n", __FUNCTION__);
+		DBG_ERROR(("\n %s : SIGINT/SIGTERM received  - killing child player process...\n", __FUNCTION__));
 		exit(ExitPlayer());
 	}
 	else if(signo == SIGCHLD)
@@ -770,12 +790,12 @@ void sigaction_handler(int signo, siginfo_t * siginfo, void *data)
 		int childStatus = 0;
 		pid_t childPid= 0;
 		
-		printf("\n %s : SIGCHLD received - waiting child player process to exit[%d]...", __FUNCTION__, rmPlayer.playerPid);
+		DBG_INFO(("\n %s : SIGCHLD received - waiting child player process to exit[%d]...", __FUNCTION__, rmPlayer.playerPid));
 		childPid = waitpid(-1/*rmPlayer.playerPid*/, &childStatus, WNOHANG);
 		if(childPid < 0)
 			CheckErrNo();
 		else
-			printf("...DONE [CHILD PID=%d]\n", childPid);
+			DBG_INFO(("...DONE [CHILD PID=%d]\n", childPid));
 	
 		rmPlayer.playbackState = PLAYBACK_STOPPED;
 		
@@ -784,11 +804,11 @@ void sigaction_handler(int signo, siginfo_t * siginfo, void *data)
 		{
 			//Indicate completion of killing of previous child
 			rm_sem_post(); 
-			printf("\n Child exited abnormally, releasing semaphore \n"); 
+			DBG_INFO(("\n Child exited abnormally, releasing semaphore \n")); 
 		}
 	}	
 	else
-		printf("\n %s : Unknown or unhandled signal %d\n", __FUNCTION__, signo);
+		DBG_ERROR(("\n %s : Unknown or unhandled signal %d\n", __FUNCTION__, signo));
 		
 	rm_sem_dispval(rmPlayer.semId, 0);
 }
@@ -878,55 +898,10 @@ void registerSignalHandlers()
 #endif
 }
 
-int main(int argc, char *argv[])
+int userChoice()
 {
 	int option = 0;
 	int retVal = 0;
-	union semun arg;
-	
-	registerSignalHandlers();
-	
-	if( argc < 2)
-	{
-		printf("\n %s : No start dir specified, using current working directory...\n", argv[0]);
-		if(!getcwd(rmPlayer.curDir, RM_MAX_PATH_LEN))
-		{
-			printf("\n %s : error in getting current working dir\n", argv[0]);
-			exit(1);
-		}
-	}
-	else
-	{
-		//Use the user supplied start dir
-		memcpy(rmPlayer.curDir, argv[1], strlen(argv[1]));
-		memcpy(rmPlayer.startingDir, argv[1], strlen(argv[1]));
-	}
-	
-	rmPlayer.devRandFd = open("/dev/urandom", O_RDONLY|O_NONBLOCK);
-	
-	if(rmPlayer.devRandFd < 0)
-	{
-		printf("\nFailed to open /dev/urandom, exiting... \n");
-		exit(1);
-	}
-	
-	srand(GetRandomNumber());
-    
-    UpdatePlayerInstance();
-    
-    rmPlayer.playbackState = PLAYBACK_INVALID;
-    rmPlayer.playerPid = 0;
-    
-    rmPlayer.semId = rm_sem_init();
-    
-    /* initialize semaphore #0 to 1: */ 
-    arg.val = 0; 
-    if (semctl(rmPlayer.semId, 0, SETVAL, arg) == -1) { 
-		perror("semctl"); 
-        exit(1); 
-    } 
-    
-    rm_sem_dispval(rmPlayer.semId, 0);
 
 	do
 	{
@@ -960,5 +935,83 @@ int main(int argc, char *argv[])
 		}
 	}while(true);
 
+	return 0;
+}
+
+int autoPlay()
+{
+	do
+	{
+		if(rmPlayer.playbackState != PLAYBACK_PLAYING)
+		{
+			SelectNextSong();
+			printf("\n Next %s \n Previous %s\n", rmPlayer.nextSong, rmPlayer.prevSong);
+
+			printf("\n Playing %s...\n", rmPlayer.nextSong);
+			PlaySong();
+		}
+		
+		sleep(10);
+
+	}while(true);
+
+return 0;
+}
+
+int main(int argc, char *argv[])
+{
+	int retVal = 0;
+	union semun arg;
+	
+	registerSignalHandlers();
+	
+	if( argc < 2)
+	{
+		DBG_ERROR(("\n %s : No start dir specified, using current working directory...\n", argv[0]));
+		// if(!getcwd(rmPlayer.curDir, RM_MAX_PATH_LEN))
+		// {
+		// 	DBG_ERROR(("\n %s : error in getting current working dir\n", argv[0]));
+		 	exit(1);
+		// }
+	}
+	else
+	{
+		//Use the user supplied start dir
+		memcpy(rmPlayer.curDir, argv[1], strlen(argv[1]));
+		memcpy(rmPlayer.startingDir, argv[1], strlen(argv[1]));
+	}
+
+	memcpy(rmPlayer.startingDir, rmPlayer.curDir, strlen(rmPlayer.curDir));
+	
+	rmPlayer.devRandFd = open("/dev/urandom", O_RDONLY|O_NONBLOCK);
+	
+	if(rmPlayer.devRandFd < 0)
+	{
+		DBG_ERROR(("\nFailed to open /dev/urandom, exiting... \n"));
+		exit(1);
+	}
+	
+	srand(GetRandomNumber());
+    
+    UpdatePlayerInstance();
+    
+    rmPlayer.playbackState = PLAYBACK_INVALID;
+    rmPlayer.playerPid = 0;
+    
+    rmPlayer.semId = rm_sem_init();
+    
+    /* initialize semaphore #0 to 1: */ 
+    arg.val = 0; 
+    if (semctl(rmPlayer.semId, 0, SETVAL, arg) == -1) { 
+		perror("semctl"); 
+        exit(1); 
+    } 
+    
+    rm_sem_dispval(rmPlayer.semId, 0);
+
+    autoPlay();
+	
 	exit(retVal);
 }
+
+
